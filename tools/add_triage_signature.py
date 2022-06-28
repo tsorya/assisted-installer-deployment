@@ -13,6 +13,7 @@ import sys
 import subprocess
 import tempfile
 import yaml
+import ipaddress
 from collections import OrderedDict, defaultdict
 from datetime import datetime
 from textwrap import dedent
@@ -35,7 +36,6 @@ CF_DOMAIN = "12319045"
 CF_CLUSTER_ID = "12316349"
 CF_FUNCTION_IMPACT = "12317358"
 CF_IGNORED_DOMAINS = {"redhat.com", "juniper.net", "nissho-ele.co.jp"}
-
 
 logger = logging.getLogger(__name__)
 
@@ -323,7 +323,7 @@ class ErrorSignature(Signature):
     def _update_triaging_ticket(self, key, comment, should_update=False):
         Signature._update_triaging_ticket(self, key, comment, should_update=should_update)
         if should_update:
-            self._add_signature_label(key, ["SIGNATURE_"+self._signature_label])
+            self._add_signature_label(key, ["SIGNATURE_" + self._signature_label])
 
 
 class HostsStatusSignature(Signature):
@@ -500,10 +500,10 @@ class FailureDetails(Signature):
             feature_usage = json.loads(feature_usage_field)
             operators = [feature for feature in feature_usage.keys() if self.is_olm_operator(feature)]
             other_features = [feature for feature in feature_usage.keys() if not self.is_olm_operator(feature)]
-            if len(operators+other_features) > 0:
+            if len(operators + other_features) > 0:
                 labels = []
-                for f in operators+other_features:
-                    labels.append("FEATURE-"+f.replace(" ", "-"))
+                for f in operators + other_features:
+                    labels.append("FEATURE-" + f.replace(" ", "-"))
 
                 update_fields["labels"] = labels
 
@@ -530,7 +530,6 @@ class HostsExtraDetailSignature(Signature):
         super().__init__(jira_client, comment_identifying_string="h1. Host extra details:")
 
     def _update_ticket(self, url, issue_key, should_update=False):
-
         url = self._logs_url_to_api(url)
         md = get_metadata_json(url)
 
@@ -596,9 +595,9 @@ class InstallationDiskFIOSignature(Signature):
             if len(host_fio_events) != 0:
                 _events, host_fio_events_durations = zip(*fio_events_by_host[host["id"]])
                 fio_message = (
-                    "{color:red}Installation disk is too slow, fio durations: " +
-                    ", ".join(f"{duration}ms" for duration in host_fio_events_durations) +
-                    "{color}"
+                        "{color:red}Installation disk is too slow, fio durations: " +
+                        ", ".join(f"{duration}ms" for duration in host_fio_events_durations) +
+                        "{color}"
                 )
 
                 hosts.append(OrderedDict(
@@ -710,7 +709,8 @@ class StorageDetailSignature(Signature):
             output.append("non-zero smartctl exit code: " + ", ".join(flag.name for flag in cls.SmartctlExitCode
                                                                       if flag in cls.SmartctlExitCode(exit_code)))
             if "smart_status" not in smart:
-                if cls.SmartctlExitCode(exit_code) == cls.SmartctlExitCode.SOME_ATA_COMMAND_FAILED_OR_SMART_CHECKSUM_ERROR:
+                if cls.SmartctlExitCode(
+                        exit_code) == cls.SmartctlExitCode.SOME_ATA_COMMAND_FAILED_OR_SMART_CHECKSUM_ERROR:
                     output.append(
                         "{color:green}*this typically happens on virtual disks*{color} that don't actually have S.M.A.R.T. information,"
                         " but may also happen due to other reasons")
@@ -804,6 +804,32 @@ class StorageDetailSignature(Signature):
         self._update_triaging_ticket(issue_key, report, should_update=should_update)
 
 
+class SNOMachineCidrSignature(Signature):
+    def __init__(self, jira_client):
+        super().__init__(jira_client, comment_identifying_string="h1. Invalid machine cidr")
+
+    def _update_ticket(self, url, issue_key, should_update=False):
+        url = self._logs_url_to_api(url)
+        md = get_metadata_json(url)
+
+        cluster = md['cluster']
+
+        if cluster.get("high_availability_mode") != "None":
+            return
+
+        host = cluster['hosts'][0]
+        inventory = json.loads(host['inventory'])
+        machine_cidr = ipaddress.ip_network(cluster["machine_networks"][0]["cidr"])
+        for route in inventory['routes']:
+            # currently only relevant for ipv4
+            if route.get('destination') == "0.0.0.0" \
+                    and route.get("gateway") and ipaddress.ip_address(route["gateway"]) in machine_cidr:
+                return
+
+        report = f"Machine cidr {machine_cidr} doesn't match any default route configured on the host"
+        self._update_triaging_ticket(issue_key, report, should_update=should_update)
+
+
 class ComponentsVersionSignature(Signature):
     def __init__(self, jira_client):
         super().__init__(jira_client, comment_identifying_string="h1. Components version information:")
@@ -865,13 +891,12 @@ class LibvirtRebootFlagSignature(ErrorSignature):
                     status=host['status'],
                     num_disks=len(inventory.get('disks', []))))
 
-        if len(hosts)+1 == len(cluster['hosts']):
+        if len(hosts) + 1 == len(cluster['hosts']):
             report = self._generate_table_for_report(hosts)
             self._update_triaging_ticket(issue_key, report, should_update=should_update)
 
 
 class ApiInvalidCertificateSignature(ErrorSignature):
-
     LOG_PATTERN = re.compile('time=".*" level=error msg=".*x509: certificate is valid.* not .*')
 
     def __init__(self, jira_client):
@@ -1130,7 +1155,8 @@ class AgentStepFailureSignature(Signature):
                 step_failure_message_match = self.MSG_PATTERN.match(step_failure_log["message"])
 
                 if step_failure_message_match is None:
-                    logger.warning("Step failure signature skipped failure because failure message has unexpected format")
+                    logger.warning(
+                        "Step failure signature skipped failure because failure message has unexpected format")
                     continue
 
                 step_failure_message = step_failure_message_match.groupdict()
@@ -1176,7 +1202,8 @@ class MustGatherAnalysis(Signature):
             try:
                 tmp_mustgather.write(mustgather)
                 tmp_mustgather.flush()
-                report = subprocess.run(["insights", "run", "-p", "ccx_rules_ocp", tmp_mustgather.name], stdout=subprocess.PIPE)
+                report = subprocess.run(["insights", "run", "-p", "ccx_rules_ocp", tmp_mustgather.name],
+                                        stdout=subprocess.PIPE)
                 with tempfile.NamedTemporaryFile(prefix="insights-report-", suffix=".txt") as tmp_report:
                     try:
                         logger.debug(f"Writing Insights report as {tmp_report.name}")
@@ -1247,9 +1274,9 @@ class OSInstallationTime(Signature):
 
         try:
             total_duration_seconds = (
-                cls._get_end_event_timestamp(host_events)
-                -
-                cls._get_start_event_timestamp(host_events)
+                    cls._get_end_event_timestamp(host_events)
+                    -
+                    cls._get_start_event_timestamp(host_events)
             ).total_seconds()
         except cls.NoEventFound:
             return entry
@@ -1290,8 +1317,7 @@ SIGNATURES = [AllInstallationAttemptsSignature, ApiInvalidCertificateSignature, 
               StorageDetailSignature, InstallationDiskFIOSignature, LibvirtRebootFlagSignature,
               MediaDisconnectionSignature, ConsoleTimeoutSignature, AgentStepFailureSignature,
               CNIConfigurationError, MustGatherAnalysis, OSInstallationTime,
-              CoreOSInstallerErrorSignature]
-
+              CoreOSInstallerErrorSignature, SNOMachineCidrSignature]
 
 ############################
 # Signature runner functionality
@@ -1476,7 +1502,8 @@ You can run this script without affecting the tickets by using the --dry-run fla
 
     selectors_group = parser.add_argument_group(title="Issues selection")
     selectors = selectors_group.add_mutually_exclusive_group(required=True)
-    selectors.add_argument("-r", "--recent-issues", action='store_true', help="Handle recent (30 days) Triaging Tickets")
+    selectors.add_argument("-r", "--recent-issues", action='store_true',
+                           help="Handle recent (30 days) Triaging Tickets")
     selectors.add_argument("-a", "--all-issues", action='store_true', help="Handle all Triaging Tickets")
     selectors.add_argument("-i", "--issue", required=False, help="Triage issue key")
     selectors.add_argument("-s", "--search-query", required=False, help="Triage issue jql query")
